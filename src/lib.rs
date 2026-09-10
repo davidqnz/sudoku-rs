@@ -22,4 +22,4 @@ pub mod solver;
 
 pub use board::{Board, ParseError};
 pub use generator::Difficulty;
-pub use solver::{Contradiction, SolveStats};
+pub use solver::{Contradiction, Detail, SolveStats};

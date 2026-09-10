@@ -8,7 +8,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use sudoku_rs::board::Board;
 use sudoku_rs::generator::{Difficulty, generate};
-use sudoku_rs::solver::{SolveStats, count_solutions, for_each_solution, solve_first};
+use sudoku_rs::solver::{
+    Detail, SolveStats, count_solutions, count_solutions_with_stats, for_each_solution, solve_first,
+};
 
 const USAGE: &str = "\
 sudoku-rs -- a constraint-propagation Sudoku solver
@@ -180,17 +182,16 @@ const PLAIN_COUNT_CAP: usize = 1000;
 /// output, so it goes to stdout as a bare number a script can read.
 fn print_solution_count(puzzle: &Board, opts: &Options) -> Result<(), String> {
     let limit = opts.limit.unwrap_or(usize::MAX);
-    let mut count = 0usize;
 
     let started = Instant::now();
-    let stats = for_each_solution(puzzle, |_| {
-        count += 1;
-        if count >= limit {
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
-        }
-    });
+    // Counting every elimination costs about a tenth of the search, and this
+    // mode's output is a number, so only ask for that detail when it is shown.
+    let detail = if opts.stats {
+        Detail::Full
+    } else {
+        Detail::Search
+    };
+    let (count, stats) = count_solutions_with_stats(puzzle, limit, detail);
     let elapsed = started.elapsed();
 
     println!("{count}");

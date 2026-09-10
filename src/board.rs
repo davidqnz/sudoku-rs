@@ -30,6 +30,47 @@ pub const UNITS: [[u8; 9]; 27] = build_units();
 /// CSP; the solver walks it instead of materialising arcs.
 pub const PEERS: [[u8; 20]; 81] = build_peers();
 
+/// The three units -- row, column, box -- each cell belongs to, as a mask of
+/// bits into [`UNITS`]. Propagation uses it to remember which units a changed
+/// domain has made worth re-examining.
+pub const CELL_UNITS: [u32; 81] = build_cell_units();
+
+/// Every unit at once, for a sweep that cannot assume anything is clean.
+pub const ALL_UNITS: u32 = (1 << 27) - 1;
+
+/// The same three units as [`CELL_UNITS`], as indices rather than a mask, for
+/// the callers that want to visit them rather than test them.
+pub const CELL_UNIT_IDS: [[u8; 3]; 81] = build_cell_unit_ids();
+
+const fn build_cell_unit_ids() -> [[u8; 3]; 81] {
+    let mut ids = [[0u8; 3]; 81];
+    let mut cell = 0;
+    while cell < 81 {
+        let row = cell / 9;
+        let col = cell % 9;
+        ids[cell] = [
+            row as u8,
+            (9 + col) as u8,
+            (18 + (row / 3) * 3 + col / 3) as u8,
+        ];
+        cell += 1;
+    }
+    ids
+}
+
+const fn build_cell_units() -> [u32; 81] {
+    let mut masks = [0u32; 81];
+    let mut cell = 0;
+    while cell < 81 {
+        let row = cell / 9;
+        let col = cell % 9;
+        let boxx = (row / 3) * 3 + col / 3;
+        masks[cell] = (1 << row) | (1 << (9 + col)) | (1 << (18 + boxx));
+        cell += 1;
+    }
+    masks
+}
+
 const fn build_units() -> [[u8; 9]; 27] {
     let mut units = [[0u8; 9]; 27];
     let mut i = 0;
@@ -98,6 +139,16 @@ impl Board {
     /// A board with every digit still possible everywhere.
     pub const fn empty() -> Self {
         Board { cells: [ALL; 81] }
+    }
+
+    /// A board straight from 81 candidate masks.
+    ///
+    /// This is how the solver hands back a grid it worked on in its own
+    /// representation. It is deliberately not public: outside the crate a
+    /// board is built by parsing or by assigning, both of which keep the
+    /// invariant that a mask is a subset of [`ALL`].
+    pub(crate) const fn from_cells(cells: [u16; 81]) -> Self {
+        Board { cells }
     }
 
     /// The candidate mask at `idx`.

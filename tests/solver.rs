@@ -4,7 +4,10 @@ use std::ops::ControlFlow;
 
 use sudoku_rs::board::{Board, ParseError};
 use sudoku_rs::generator::{Difficulty, generate};
-use sudoku_rs::solver::{count_solutions, for_each_solution, propagate, solve_first};
+use sudoku_rs::solver::{
+    Detail, count_solutions, count_solutions_with_stats, for_each_solution,
+    for_each_solution_with_detail, propagate, solve_first,
+};
 
 const EASY: &str =
     "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79";
@@ -276,6 +279,43 @@ fn generation_is_reproducible_from_its_seed() {
         let (other, _) = generate(difficulty, 54321);
         assert_ne!(first, other, "different seeds should differ");
     }
+}
+
+#[test]
+fn counting_reports_the_same_search_either_way() {
+    let puzzle: Board = ESCARGOT.parse().unwrap();
+
+    let mut visited = 0;
+    let full = for_each_solution(&puzzle, |_| {
+        visited += 1;
+        ControlFlow::Continue(())
+    });
+    let (counted, counting) = count_solutions_with_stats(&puzzle, usize::MAX, Detail::Full);
+
+    assert_eq!(counted, visited);
+    assert_eq!(counted, count_solutions(&puzzle, usize::MAX));
+    assert_eq!(
+        counting, full,
+        "the same search should report the same work"
+    );
+}
+
+#[test]
+fn asking_for_less_detail_keeps_the_search_counters() {
+    // A puzzle propagation cannot finish alone, so there is search to count.
+    let puzzle: Board = ESCARGOT.parse().unwrap();
+    let full = for_each_solution(&puzzle, |_| ControlFlow::Continue(()));
+    let cheap =
+        for_each_solution_with_detail(&puzzle, |_| ControlFlow::Continue(()), Detail::Search);
+
+    assert!(full.branch_nodes > 0, "puzzle should need guessing");
+    assert_eq!(cheap.branch_nodes, full.branch_nodes);
+    assert_eq!(cheap.backtracks, full.backtracks);
+
+    // The two the flag drops, and only those.
+    assert_eq!(cheap.assignments, 0);
+    assert_eq!(cheap.eliminations, 0);
+    assert!(full.assignments > 0 && full.eliminations > 0);
 }
 
 /// Whether `solution` keeps every clue the puzzle started with.
