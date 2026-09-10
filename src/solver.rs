@@ -7,6 +7,8 @@
 //! -- a digit with only one home left in a unit -- which is the cheapest rule
 //! that plain arc consistency cannot see.
 
+use std::ops::ControlFlow;
+
 use crate::board::{Board, PEERS, UNITS, mask_digit};
 use crate::rng::Rng;
 
@@ -138,11 +140,49 @@ pub fn solve_first_with_rng(board: &Board, rng: &mut Rng) -> Option<(Board, Solv
 }
 
 fn solve_first_ordered(board: &Board, rng: Option<&mut Rng>) -> Option<(Board, SolveStats)> {
-    let mut found = Vec::with_capacity(1);
+    let mut solution = None;
     let mut stats = SolveStats::default();
     let mut rng = rng;
-    search(*board, 1, &mut found, &mut stats, &mut rng);
-    found.pop().map(|solution| (solution, stats))
+    let _ = search(
+        *board,
+        &mut |found: &Board| {
+            solution = Some(*found);
+            ControlFlow::Break(())
+        },
+        &mut stats,
+        &mut rng,
+    );
+    solution.map(|solution| (solution, stats))
+}
+
+/// Calls `visit` with every solution, in search order, and returns the work
+/// done. Return [`ControlFlow::Break`] from `visit` to stop the search early.
+///
+/// Solutions are never collected, so this is the way to enumerate a puzzle with
+/// many of them: an under-constrained grid can have billions, which no `Vec`
+/// could hold. A caller that wants a bounded number must break out itself.
+///
+/// ```
+/// use std::ops::ControlFlow;
+/// use sudoku_rs::{Board, solver};
+///
+/// // Four blanks in a rectangle, holding two digits that can swap.
+/// let puzzle: Board = "534..8912672195348198342567859..1423426853791713924856\
+///                      961537284287419635345286179".parse().unwrap();
+/// let mut count = 0;
+/// solver::for_each_solution(&puzzle, |_| {
+///     count += 1;
+///     ControlFlow::Continue(())
+/// });
+/// assert_eq!(count, 2);
+/// ```
+pub fn for_each_solution<F>(board: &Board, mut visit: F) -> SolveStats
+where
+    F: FnMut(&Board) -> ControlFlow<()>,
+{
+    let mut stats = SolveStats::default();
+    let _ = search(*board, &mut visit, &mut stats, &mut None);
+    stats
 }
 
 /// Counts solutions, stopping once `limit` have been found. Pass `2` to test
@@ -151,29 +191,36 @@ pub fn count_solutions(board: &Board, limit: usize) -> usize {
     if limit == 0 {
         return 0;
     }
-    let mut found = Vec::with_capacity(limit);
-    let mut stats = SolveStats::default();
-    search(*board, limit, &mut found, &mut stats, &mut None);
-    found.len()
+    let mut count = 0;
+    for_each_solution(board, |_| {
+        count += 1;
+        if count >= limit {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    });
+    count
 }
 
-/// Depth-first search over propagated states. Returns whether `limit` has been
-/// reached, which unwinds the whole recursion.
-fn search(
+/// Depth-first search over propagated states. Returns [`ControlFlow::Break`]
+/// once the visitor asks to stop, which unwinds the whole recursion.
+fn search<F>(
     mut board: Board,
-    limit: usize,
-    found: &mut Vec<Board>,
+    visit: &mut F,
     stats: &mut SolveStats,
     rng: &mut Option<&mut Rng>,
-) -> bool {
+) -> ControlFlow<()>
+where
+    F: FnMut(&Board) -> ControlFlow<()>,
+{
     if propagate_with(&mut board, stats).is_err() {
         stats.backtracks += 1;
-        return false;
+        return ControlFlow::Continue(());
     }
 
     let Some(cell) = most_constrained(&board) else {
-        found.push(board);
-        return found.len() >= limit;
+        return visit(&board);
     };
 
     stats.branch_nodes += 1;
@@ -188,11 +235,9 @@ fn search(
         // simpler than trailing every elimination for undo.
         let mut child = board;
         child.assign(cell, digit);
-        if search(child, limit, found, stats, rng) {
-            return true;
-        }
+        search(child, visit, stats, rng)?;
     }
-    false
+    ControlFlow::Continue(())
 }
 
 #[cfg(test)]

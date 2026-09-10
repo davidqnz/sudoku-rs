@@ -1,8 +1,10 @@
 //! End-to-end tests over the public engine API.
 
+use std::ops::ControlFlow;
+
 use sudoku_rs::board::{Board, ParseError};
 use sudoku_rs::generator::{Difficulty, generate};
-use sudoku_rs::solver::{count_solutions, propagate, solve_first};
+use sudoku_rs::solver::{count_solutions, for_each_solution, propagate, solve_first};
 
 const EASY: &str =
     "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79";
@@ -152,6 +154,67 @@ fn counts_every_solution_of_an_ambiguous_puzzle() {
     let found = count_solutions(&ambiguous, 5);
     assert!(found >= 1);
     assert_eq!(count_solutions(&board, 2), 1);
+}
+
+/// A grid with four blanks in a rectangle: the two digits there can swap, so
+/// it has exactly two solutions.
+const TWO_SOLUTIONS: &str =
+    "534..8912672195348198342567859..1423426853791713924856961537284287419635345286179";
+
+#[test]
+fn visits_every_solution_once() {
+    let puzzle: Board = TWO_SOLUTIONS.parse().unwrap();
+    let mut solutions = Vec::new();
+    for_each_solution(&puzzle, |solution| {
+        solutions.push(*solution);
+        ControlFlow::Continue(())
+    });
+
+    assert_eq!(solutions.len(), 2);
+    assert_ne!(solutions[0], solutions[1]);
+    for solution in &solutions {
+        assert!(solution.is_solved());
+        assert!(solution.is_consistent());
+        assert!(agrees_with_clues(&puzzle, solution));
+    }
+}
+
+#[test]
+fn breaking_out_stops_the_search() {
+    let empty = Board::empty();
+    let mut seen = 0;
+    for_each_solution(&empty, |_| {
+        seen += 1;
+        ControlFlow::Break(())
+    });
+    assert_eq!(seen, 1);
+}
+
+#[test]
+fn visiting_and_counting_agree() {
+    for puzzle in [EASY, ESCARGOT, MINIMAL_17, TWO_SOLUTIONS] {
+        let board: Board = puzzle.parse().unwrap();
+        let mut seen = 0;
+        for_each_solution(&board, |_| {
+            seen += 1;
+            ControlFlow::Continue(())
+        });
+        assert_eq!(seen, count_solutions(&board, usize::MAX));
+    }
+}
+
+#[test]
+fn a_puzzle_with_no_solution_visits_nothing() {
+    let mut board: Board = EASY.parse().unwrap();
+    board.clear(2);
+    board.assign(2, 5); // A second 5 in the top row.
+    let mut seen = 0;
+    let stats = for_each_solution(&board, |_| {
+        seen += 1;
+        ControlFlow::Continue(())
+    });
+    assert_eq!(seen, 0);
+    assert!(stats.backtracks > 0 || stats.branch_nodes == 0);
 }
 
 #[test]

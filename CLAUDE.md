@@ -38,8 +38,12 @@ solver walks `PEERS` instead of building arcs at runtime.
    a queue of newly-solved cells. After each drain it sweeps hidden singles, which arc
    consistency alone cannot find.
 2. `search` does depth-first search over propagated states, and picks the branch cell by
-   minimum remaining values. `solve_first` and `count_solutions` are both thin wrappers
-   around it. Pass `limit = 2` to `count_solutions` to test uniqueness.
+   minimum remaining values. It reports each solution to a visitor closure that returns
+   `ControlFlow`, so nothing is buffered: `for_each_solution`, `solve_first`, and
+   `count_solutions` are all thin wrappers that differ only in when they break.
+   Pass `limit = 2` to `count_solutions` to test uniqueness. Enumerate with
+   `for_each_solution`, never into a `Vec` -- a grid with few clues has more solutions
+   than memory can hold, so the caller must break out or accept an endless stream.
 
 `SolveStats.branch_nodes` is the difficulty measure. It counts the guesses propagation
 could not avoid.
