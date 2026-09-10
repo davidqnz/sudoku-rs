@@ -68,9 +68,23 @@ transpose that is one word:
 
 - striking a digit from all 20 peers of a cell is `digits[d] &= !PEER_MASK[cell]`, not a
   walk down `PEERS`;
-- naked singles and empty domains, for all 81 cells at once, come from a nine-step fold
-  (`Grid::spans`) rather than 81 population counts;
-- a digit's homes in a unit are `digits[d] & UNIT_MASK[unit]`.
+- naked singles and empty domains, for all 81 cells at once, come from a fold over the
+  nine boards (`Grid::spans`) rather than 81 population counts. The fold merges in pairs,
+  not left to right: "has a candidate, has two" is associative, so the nine boards go four
+  deep instead of nine and the dependency chain stops being the limit. `most_constrained`
+  carries the same fold one rank further, for cells with three;
+- the digit of each naked single comes out of `Grid::digit_planes`: four unions of the
+  boards, one per bit of a digit's index, which for a one-candidate cell spell that digit
+  out in binary. Four bit tests, in place of searching the boards for the one holding the
+  cell;
+- a digit's homes in a unit are `digits[d] & UNIT_MASK[unit]`. No homes refutes the board
+  and one home is a placement, and `homes == homes.isolate_lowest_one()` is exactly one or
+  the other, so the common case takes no branch at all -- and the lone home is already the
+  cell's own bit, so the placement needs nothing looked up.
+
+Scan an 81-bit set as two words, never as one: a `u128` has no trailing-zero count of its
+own, and the high half is empty most times it is asked. Carry a cell's bit alongside its
+index wherever both are wanted -- the low bit of the mask being scanned already is it.
 
 A `Grid` is 214 bytes and `Copy`, so `search` still branches on a copy rather than a trail
 of undo records. A `Board` is built only at the boundary: once on the way in, and once per
@@ -86,12 +100,22 @@ solution actually handed to a visitor.
    - `placed`, the digits already sitting in each unit. Deep in the search most digits of
      most units are placed, and a placed digit has exactly one home forever, so skipping
      them is the difference between 9 tests per unit and 2 or 3.
+
+   A sweep that places nothing has left the domains where the naked singles before it
+   found them, so `hidden_singles` reports whether it placed anything and that ends the
+   loop. Without it every propagation closes on a pass that can only confirm the one
+   before it.
 2. `search` does depth-first search over propagated states, picking the branch cell by
    minimum remaining values. The parent is already at a fixpoint, so a child propagates
-   from the one cell it guessed -- never re-seed a child from every solved cell.
+   from the one cell it guessed -- never re-seed a child from every solved cell. At a
+   fixpoint every one-candidate cell has been placed, so `solved == FULL` is exactly the
+   grid with nothing left to branch on: `most_constrained` answers half its calls, the one
+   per solution, without folding anything.
 
 **Solutions go to a `Sink`, not a closure.** `for_each_solution` builds a `Board` per
-solution; `count_solutions` does not, because counting never looks. On a puzzle with tens
+solution; `count_solutions` does not, because counting never looks. A grid only ever
+reaches a sink complete, which is what lets that `Board` be built by `to_solution_board`,
+writing each cell once instead of reading it back to merge into. On a puzzle with tens
 of thousands of solutions that transposition is a fifth of the run. Pass `limit = 2` to
 `count_solutions` to test uniqueness. Enumerate with `for_each_solution`, never into a
 `Vec` -- a grid with few clues has more solutions than memory can hold, so the caller must

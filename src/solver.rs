@@ -62,6 +62,22 @@ const PEER_MASK: [u128; 81] = build_peer_masks();
 /// Each of the 27 units, as a set of cells.
 const UNIT_MASK: [u128; 27] = build_unit_masks();
 
+/// Each cell on its own, as a set of cells.
+///
+/// A load from 1296 bytes of always-hot table, in place of the shift sequence
+/// a variable `1u128 << cell` compiles into.
+const CELL_BIT: [u128; 81] = build_cell_bits();
+
+const fn build_cell_bits() -> [u128; 81] {
+    let mut bits = [0u128; 81];
+    let mut cell = 0;
+    while cell < 81 {
+        bits[cell] = 1u128 << cell;
+        cell += 1;
+    }
+    bits
+}
+
 const fn build_peer_masks() -> [u128; 81] {
     let mut masks = [0u128; 81];
     let mut cell = 0;
@@ -88,6 +104,34 @@ const fn build_unit_masks() -> [u128; 27] {
         unit += 1;
     }
     masks
+}
+
+/// Combines two spans: cells with a candidate, and cells with two.
+///
+/// A cell holds two candidates across the union when either side already had
+/// two, or each side gave it one.
+#[inline]
+fn merge(left: (u128, u128), right: (u128, u128)) -> (u128, u128) {
+    (left.0 | right.0, left.1 | right.1 | (left.0 & right.0))
+}
+
+/// One digit's board as a span: every cell it claims has one candidate.
+#[inline]
+fn span1(board_of_digit: u128) -> (u128, u128, u128) {
+    (board_of_digit, 0, 0)
+}
+
+/// [`merge`], carrying a third rank: cells with three candidates.
+///
+/// A cell reaches three across the union by having three on one side, or two
+/// on one and one on the other.
+#[inline]
+fn merge3(left: (u128, u128, u128), right: (u128, u128, u128)) -> (u128, u128, u128) {
+    (
+        left.0 | right.0,
+        left.1 | right.1 | (left.0 & right.0),
+        left.2 | right.2 | (left.1 & right.0) | (left.0 & right.1),
+    )
 }
 
 /// A board transposed: one 81-bit set of cells per digit, instead of one
@@ -145,11 +189,47 @@ impl Grid {
     fn to_board(self) -> Board {
         let mut cells = [0u16; 81];
         for (digit, board_of_digit) in self.digits.into_iter().enumerate() {
-            let mut rest = board_of_digit;
-            while rest != 0 {
-                let cell = rest.trailing_zeros() as usize;
-                rest &= rest - 1;
-                cells[cell] |= 1u16 << digit;
+            // Scanned as two words rather than one: a `u128` has no trailing
+            // zero count of its own, so every step of a 128-bit scan pays for
+            // the halves to be stitched back together and taken apart again.
+            let bit = 1u16 << digit;
+            let mut low = board_of_digit as u64;
+            while low != 0 {
+                let cell = low.trailing_zeros() as usize;
+                low &= low - 1;
+                cells[cell] |= bit;
+            }
+            let mut high = (board_of_digit >> 64) as u32;
+            while high != 0 {
+                let cell = 64 + high.trailing_zeros() as usize;
+                high &= high - 1;
+                cells[cell] |= bit;
+            }
+        }
+        Board::from_cells(cells)
+    }
+
+    /// Transposes a grid the search has finished with.
+    ///
+    /// Every cell holds exactly one digit, so each is written once and none
+    /// has to be read back first -- which is the whole of the difference from
+    /// [`Grid::to_board`], and worth having on the one call the search makes
+    /// per solution it finds.
+    fn to_solution_board(self) -> Board {
+        let mut cells = [0u16; 81];
+        for (digit, board_of_digit) in self.digits.into_iter().enumerate() {
+            let bit = 1u16 << digit;
+            let mut low = board_of_digit as u64;
+            while low != 0 {
+                let cell = low.trailing_zeros() as usize;
+                low &= low - 1;
+                cells[cell] = bit;
+            }
+            let mut high = (board_of_digit >> 64) as u32;
+            while high != 0 {
+                let cell = 64 + high.trailing_zeros() as usize;
+                high &= high - 1;
+                cells[cell] = bit;
             }
         }
         Board::from_cells(cells)
@@ -158,7 +238,7 @@ impl Grid {
     /// The digits still open at `cell`, as a 9-bit mask.
     #[inline]
     fn candidates(&self, cell: usize) -> u16 {
-        let bit = 1u128 << cell;
+        let bit = CELL_BIT[cell];
         let mut mask = 0u16;
         for (digit, &board_of_digit) in self.digits.iter().enumerate() {
             mask |= u16::from(board_of_digit & bit != 0) << digit;
@@ -175,13 +255,20 @@ impl Grid {
     /// which between them are everything arc consistency needs to look at.
     #[inline]
     fn spans(&self) -> (u128, u128) {
-        let mut at_least_one = 0u128;
-        let mut at_least_two = 0u128;
-        for &board_of_digit in self.digits.iter() {
-            at_least_two |= at_least_one & board_of_digit;
-            at_least_one |= board_of_digit;
-        }
-        (at_least_one, at_least_two)
+        // Merged in pairs rather than accumulated left to right. The merge is
+        // associative -- two halves reach two candidates either inside one of
+        // them or across the two -- so the nine boards can be folded four
+        // deep instead of nine, and the machine has independent work to do at
+        // every level.
+        let d = &self.digits;
+        let (a1, a2) = merge((d[0], 0), (d[1], 0));
+        let (b1, b2) = merge((d[2], 0), (d[3], 0));
+        let (c1, c2) = merge((d[4], 0), (d[5], 0));
+        let (e1, e2) = merge((d[6], 0), (d[7], 0));
+        let ab = merge((a1, a2), (b1, b2));
+        let ce = merge((c1, c2), (e1, e2));
+        let (one, two) = merge(ab, ce);
+        (one | d[8], two | (one & d[8]))
     }
 
     /// Fixes `cell` to `digit` when the cell still holds other candidates, as
@@ -190,17 +277,18 @@ impl Grid {
     fn place<const DETAILED: bool>(
         &mut self,
         cell: usize,
+        cell_bit: u128,
         digit: usize,
         stats: &mut SolveStats,
         dirty: &mut u32,
     ) {
-        debug_assert!(self.digits[digit] & (1u128 << cell) != 0, "digit not open");
-        let cell_bit = 1u128 << cell;
+        debug_assert_eq!(cell_bit, 1u128 << cell, "cell and bit disagree");
+        debug_assert!(self.digits[digit] & cell_bit != 0, "digit not open");
         for board_of_digit in self.digits.iter_mut() {
             *board_of_digit &= !cell_bit;
         }
         self.digits[digit] |= cell_bit;
-        self.place_single::<DETAILED>(cell, digit, stats, dirty);
+        self.place_single::<DETAILED>(cell, cell_bit, digit, stats, dirty);
     }
 
     /// Fixes `cell` to `digit`, striking the digit from all 20 peers and
@@ -213,14 +301,17 @@ impl Grid {
     fn place_single<const DETAILED: bool>(
         &mut self,
         cell: usize,
+        cell_bit: u128,
         digit: usize,
         stats: &mut SolveStats,
         dirty: &mut u32,
     ) {
-        let cell_bit = 1u128 << cell;
         let peers = PEER_MASK[cell];
-        let mut removed = self.digits[digit] & peers;
-        self.digits[digit] &= !peers;
+        let removed = self.digits[digit] & peers;
+        // The struck peers are what `removed` already holds, so they come
+        // back out with an `XOR` rather than by inverting the peer mask and
+        // masking the board a second time.
+        self.digits[digit] ^= removed;
         self.solved |= cell_bit;
 
         *dirty |= CELL_UNITS[cell];
@@ -232,11 +323,41 @@ impl Grid {
         if DETAILED {
             stats.eliminations += removed.count_ones() as usize;
         }
-        while removed != 0 {
-            let peer = removed.trailing_zeros() as usize;
-            removed &= removed - 1;
+        // Two words rather than one, as in `to_board`: the high half is empty
+        // for most cells, and a 128-bit scan cannot skip it for free.
+        let mut low = removed as u64;
+        while low != 0 {
+            let peer = low.trailing_zeros() as usize;
+            low &= low - 1;
             *dirty |= CELL_UNITS[peer];
         }
+        let mut high = (removed >> 64) as u32;
+        while high != 0 {
+            let peer = 64 + high.trailing_zeros() as usize;
+            high &= high - 1;
+            *dirty |= CELL_UNITS[peer];
+        }
+    }
+
+    /// The digit index of every single-candidate cell, as four planes.
+    ///
+    /// Plane `j` is the union of the boards of the digits with bit `j` set in
+    /// their index, so for a cell holding one candidate the four planes spell
+    /// out that candidate's index in binary. A cell holding more says nothing,
+    /// which is all naked singles ever asks about.
+    ///
+    /// Nine `OR`s, none of them waiting on another, in exchange for reading
+    /// the digit of each placement out of four bit tests instead of hunting
+    /// down the boards one at a time for it.
+    #[inline]
+    fn digit_planes(&self) -> [u128; 4] {
+        let d = &self.digits;
+        [
+            d[1] | d[3] | d[5] | d[7],
+            d[2] | d[3] | d[6] | d[7],
+            d[4] | d[5] | d[6] | d[7],
+            d[8],
+        ]
     }
 
     /// The digit at `cell` when it is down to one, or `Err` when it is down to
@@ -244,7 +365,7 @@ impl Grid {
     /// when it was spotted is still a single or already empty.
     #[inline]
     fn lone_digit(&self, cell: usize) -> Result<usize, Contradiction> {
-        let bit = 1u128 << cell;
+        let bit = CELL_BIT[cell];
         for (digit, &board_of_digit) in self.digits.iter().enumerate() {
             if board_of_digit & bit != 0 {
                 return Ok(digit);
@@ -265,9 +386,10 @@ impl Grid {
         let (at_least_one, at_least_two) = self.spans();
         let mut todo = at_least_one & !at_least_two;
         while todo != 0 {
+            let cell_bit = todo.isolate_lowest_one();
             let cell = todo.trailing_zeros() as usize;
             todo &= todo - 1;
-            self.place_single::<DETAILED>(cell, self.lone_digit(cell)?, stats, dirty);
+            self.place_single::<DETAILED>(cell, cell_bit, self.lone_digit(cell)?, stats, dirty);
         }
         Ok(())
     }
@@ -288,7 +410,13 @@ impl Grid {
             if dirty == 0 {
                 return Ok(());
             }
-            self.hidden_singles::<DETAILED>(stats, &mut dirty)?;
+            // A sweep that placed nothing left the domains where the naked
+            // singles above found them, so that is the fixpoint. Without this
+            // every propagation ends on a naked-singles pass that can only
+            // confirm what the one before it already did.
+            if !self.hidden_singles::<DETAILED>(stats, &mut dirty)? {
+                return Ok(());
+            }
         }
     }
 
@@ -308,15 +436,27 @@ impl Grid {
             if todo == 0 {
                 return Ok(());
             }
+            let planes = self.digit_planes();
             while todo != 0 {
+                // The lowest set bit is the cell's own mask, so the scan hands
+                // over both halves of what a placement needs.
+                let bit = todo.isolate_lowest_one();
                 let cell = todo.trailing_zeros() as usize;
                 todo &= todo - 1;
-                // An earlier placement in this batch may have emptied the cell.
-                let digit = self.lone_digit(cell)?;
+                let digit = usize::from(planes[0] & bit != 0)
+                    | usize::from(planes[1] & bit != 0) << 1
+                    | usize::from(planes[2] & bit != 0) << 2
+                    | usize::from(planes[3] & bit != 0) << 3;
+                // The planes were read before this batch began, and an earlier
+                // placement in it may have struck this cell's one candidate.
+                // A cell that had one candidate and has lost it has none.
+                if self.digits[digit] & bit == 0 {
+                    return Err(Contradiction);
+                }
                 if DETAILED {
                     stats.assignments += 1;
                 }
-                self.place_single::<DETAILED>(cell, digit, stats, dirty);
+                self.place_single::<DETAILED>(cell, bit, digit, stats, dirty);
             }
         }
     }
@@ -327,11 +467,14 @@ impl Grid {
     /// directly: no homes refutes the board, and one home is a placement. Only
     /// digits still open in the unit are asked; a digit already placed there
     /// has one home too, and is the case worth not looking at.
+    /// Returns whether it placed anything, which is what tells [`propagate`]
+    /// the loop has anything left to do.
     fn hidden_singles<const DETAILED: bool>(
         &mut self,
         stats: &mut SolveStats,
         dirty: &mut u32,
-    ) -> Result<(), Contradiction> {
+    ) -> Result<bool, Contradiction> {
+        let mut placed_any = false;
         while *dirty != 0 {
             let index = dirty.trailing_zeros() as usize;
             *dirty &= *dirty - 1;
@@ -341,20 +484,32 @@ impl Grid {
                 let digit = open.trailing_zeros() as usize;
                 open &= open - 1;
                 let homes = self.digits[digit] & unit;
-                if homes == 0 {
-                    return Err(Contradiction);
-                }
-                if homes & (homes - 1) == 0 {
+                // One test for both endings: a digit with no home refutes the
+                // board and a digit with one home is a placement, and a digit
+                // equal to its own lowest bit is exactly one or the other.
+                // Everything else -- the common case -- takes no branch at all.
+                if homes == homes.isolate_lowest_one() {
+                    if homes == 0 {
+                        return Err(Contradiction);
+                    }
+                    placed_any = true;
                     if DETAILED {
                         stats.assignments += 1;
                     }
-                    // Reopens this unit as well: the digit's neighbours here
-                    // were read before the placement.
-                    self.place::<DETAILED>(homes.trailing_zeros() as usize, digit, stats, dirty);
+                    // The lone home is the cell's own bit, so the placement
+                    // needs nothing looked up. Reopens this unit as well: the
+                    // digit's neighbours here were read before the placement.
+                    self.place::<DETAILED>(
+                        homes.trailing_zeros() as usize,
+                        homes,
+                        digit,
+                        stats,
+                        dirty,
+                    );
                 }
             }
         }
-        Ok(())
+        Ok(placed_any)
     }
 
     /// The unsolved cell with the fewest candidates (minimum remaining
@@ -364,14 +519,23 @@ impl Grid {
     /// case over directly. Anything else falls back to counting, over only the
     /// cells that could still win.
     fn most_constrained(&self) -> Option<usize> {
-        let mut at_least_one = 0u128;
-        let mut at_least_two = 0u128;
-        let mut at_least_three = 0u128;
-        for &board_of_digit in self.digits.iter() {
-            at_least_three |= at_least_two & board_of_digit;
-            at_least_two |= at_least_one & board_of_digit;
-            at_least_one |= board_of_digit;
+        // At a fixpoint every singleton cell has been placed, so a full
+        // `solved` is exactly the case with nothing left to branch on -- and
+        // it is half the calls, one per solution the search reaches.
+        if self.solved == FULL {
+            return None;
         }
+        // Folded in pairs, for the reason [`Grid::spans`] is.
+        let d = &self.digits;
+        let ab = merge3(
+            merge3(span1(d[0]), span1(d[1])),
+            merge3(span1(d[2]), span1(d[3])),
+        );
+        let ce = merge3(
+            merge3(span1(d[4]), span1(d[5])),
+            merge3(span1(d[6]), span1(d[7])),
+        );
+        let (_, at_least_two, at_least_three) = merge3(merge3(ab, ce), span1(d[8]));
 
         let exactly_two = at_least_two & !at_least_three;
         if exactly_two != 0 {
@@ -399,6 +563,9 @@ impl Grid {
 
 /// Where the search sends the solutions it finds.
 ///
+/// A grid only ever reaches a sink complete: [`search`] hands one over at the
+/// point it finds nothing left to branch on. Implementations may rely on that.
+///
 /// Transposing a grid back into a [`Board`] costs more than finding it did,
 /// once a puzzle has solutions in the thousands, and a caller that only counts
 /// them never looks. So the sink, not the search, decides whether a board gets
@@ -423,7 +590,7 @@ where
 {
     #[inline]
     fn solution(&mut self, grid: &Grid) -> ControlFlow<()> {
-        (self.0)(&grid.to_board())
+        (self.0)(&grid.to_solution_board())
     }
 }
 
@@ -623,7 +790,7 @@ fn search<S: Sink, const DETAILED: bool>(
         // simpler than trailing every elimination for undo.
         let mut child = grid;
         let mut dirty = 0;
-        child.place::<DETAILED>(cell, usize::from(digit), stats, &mut dirty);
+        child.place::<DETAILED>(cell, CELL_BIT[cell], usize::from(digit), stats, &mut dirty);
         if child.propagate::<DETAILED>(stats, dirty).is_err() {
             stats.backtracks += 1;
             continue;
