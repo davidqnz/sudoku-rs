@@ -13,8 +13,7 @@ cargo clippy --all-targets
 cargo fmt
 cargo run -- gen --difficulty hard --stats
 cargo run --release -- solve puzzle.txt --count --stats
-just bench                          # hyperfine: wall clock of the whole binary
-just bench-rate                     # criterion: solutions per second
+just bench                          # criterion: solutions per second
 ```
 
 Generator tests solve many puzzles. Use `cargo test --release` if they feel slow.
@@ -25,14 +24,10 @@ solutions to enumerate. Pass `--limit` if you need to.
 
 ## Measuring
 
-Two benchmarks, both on the same 20-clue grid, both enumerating its 31610
-solutions -- a puzzle with one solution would only measure how fast the search
-gets lucky.
+The benchmark uses a 20-clue grid and enumerates its 31610 solutions -- a
+puzzle with one solution would only measure how fast the search gets lucky.
 
-`just bench` times the binary end to end. It is the quick check, and includes
-about 1ms of process startup.
-
-`just bench-rate` runs `benches/solver.rs` under criterion and reports a rate.
+`just bench` runs `benches/solver.rs` under criterion and reports a rate.
 It has two cases: `count` is the search alone, and `visit` adds the `Board` built
 per solution, which is a good third of the work on a grid with this many. The
 puzzle is inlined there, next to the `SOLUTIONS` count criterion divides by to
@@ -86,7 +81,7 @@ Scan an 81-bit set as two words, never as one: a `u128` has no trailing-zero cou
 own, and the high half is empty most times it is asked. Carry a cell's bit alongside its
 index wherever both are wanted -- the low bit of the mask being scanned already is it.
 
-A `Grid` is 214 bytes and `Copy`, so `search` still branches on a copy rather than a trail
+A `Grid` is 224 bytes and `Copy`, so `search` still branches on a copy rather than a trail
 of undo records. A `Board` is built only at the boundary: once on the way in, and once per
 solution actually handed to a visitor.
 
@@ -129,11 +124,11 @@ away rather than being branched over. `main.rs` asks for `Detail::Full` only whe
 `--stats` was passed.
 
 `SolveStats.branch_nodes` is the difficulty measure. It counts the guesses propagation
-could not avoid. It, and `backtracks`, must not change for a given puzzle: the generator
-rates difficulty by `branch_nodes`, so a change to either changes what every seed
-produces. `assignments` and `eliminations` are diagnostics and may shift, since
-propagation stops the moment it finds a contradiction and the order it gets there in is
-not fixed.
+could not avoid. The generator rates difficulty by it, so a solver change that moves
+`branch_nodes` also changes what each seed produces. That is allowed while the algorithm
+is still changing; say so when a change does it. `assignments` and `eliminations` are
+diagnostics and may shift, since propagation stops the moment it finds a contradiction
+and the order it gets there in is not fixed.
 
 **The generator digs** (`src/generator.rs`): draw a random complete grid with
 `solve_first_with_rng` on an empty board, then remove clues in random order and keep a
@@ -142,13 +137,17 @@ difficulty band. `Difficulty` bands must not overlap; a test enforces this. If n
 of `MAX_ATTEMPTS` lands in the band, `generate` returns the closest puzzle, so it always
 gives back a valid unique puzzle.
 
-**Determinism is a contract.** `rng::Rng` is SplitMix64, written in-crate so the crate
-keeps zero runtime dependencies (criterion, in `[dev-dependencies]`, is the only one). The same seed and difficulty must always give the same puzzle.
-A change to `Rng`, to the shuffle, to the order the generator draws numbers, to which cell
-`most_constrained` picks, or to what propagation can deduce will break that. When
-changing the solver, diff `gen --seed N --line --stats` across a range of seeds and
-difficulties: the grids, `clues`, `guesses`, and `backtracks` must all be unchanged. Do
-not add a runtime dependency without a reason to give up that property.
+**Determinism is per build.** Within one build, the same seed and difficulty must always
+give the same puzzle; `generation_is_reproducible_from_its_seed` checks this. Across
+builds, seed output may change. Do not add golden or snapshot tests that fix it. A change
+to `Rng`, to the shuffle, to the order the generator draws numbers, to which cell
+`most_constrained` picks, or to what propagation can deduce changes seed output. That is
+expected, but report it: diff `gen --seed N --line --stats` across a few seeds and
+difficulties before and after.
+
+`rng::Rng` is SplitMix64, written in-crate so the crate keeps zero runtime dependencies
+(criterion, in `[dev-dependencies]`, is the only one). Do not add a runtime dependency
+without a reason.
 
 **The release profile is tuned** (`lto = "fat"`, `codegen-units = 1`,
 `panic = "abort"`), which is worth about 8% and matters because the solver is one crate

@@ -5,7 +5,7 @@
 //! is the rate the search walks a whole tree -- which is what every change to
 //! propagation moves.
 //!
-//! Run with `just bench-rate`.
+//! Run with `just bench`.
 
 use std::hint::black_box;
 use std::ops::ControlFlow;

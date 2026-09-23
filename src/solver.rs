@@ -145,7 +145,7 @@ fn merge3(left: (u128, u128, u128), right: (u128, u128, u128)) -> (u128, u128, u
 /// walk down `PEERS`, and testing all 81 cells for a lone candidate is a
 /// nine-step fold rather than 81 population counts.
 ///
-/// At 160 bytes it is still `Copy` and still cheaper to duplicate than to
+/// At 224 bytes it is still `Copy` and still cheaper to duplicate than to
 /// journal, so search keeps branching on copies.
 #[derive(Clone, Copy)]
 struct Grid {
@@ -786,7 +786,7 @@ fn search<S: Sink, const DETAILED: bool>(
     }
 
     for &digit in digits.iter() {
-        // The grid is 160 bytes, so branching on a copy is cheaper and far
+        // The grid is 224 bytes, so branching on a copy is cheaper and far
         // simpler than trailing every elimination for undo.
         let mut child = grid;
         let mut dirty = 0;

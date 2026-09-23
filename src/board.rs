@@ -12,8 +12,14 @@ use std::str::FromStr;
 pub const ALL: u16 = 0x1FF;
 
 /// The bitmask for a single digit.
+///
+/// # Panics
+///
+/// If `digit` is not in `1..=9`. Without this check, a release build turns `0`
+/// into bit 15, which is outside [`ALL`] and makes the cell look empty.
 #[inline]
 pub const fn digit_bit(digit: u8) -> u16 {
+    assert!(digit >= 1 && digit <= 9, "digit must be in 1..=9");
     1u16 << (digit - 1)
 }
 
@@ -293,7 +299,7 @@ impl std::error::Error for ParseError {}
 impl FromStr for Board {
     type Err = ParseError;
 
-    /// Reads 81 cells, using `.`, `0`, or `_` for blanks. Whitespace and the
+    /// Reads 81 cells, using `.`, `0`, `_`, or `*` for blanks. Whitespace and the
     /// usual grid separators are skipped, so a one-line puzzle and a drawn
     /// 9-line grid both parse.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -377,6 +383,18 @@ mod tests {
         let mut actual = PEERS[0].to_vec();
         actual.sort_unstable();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "digit must be in 1..=9")]
+    fn assigning_zero_panics() {
+        Board::empty().assign(0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "digit must be in 1..=9")]
+    fn eliminating_ten_panics() {
+        Board::empty().eliminate(0, 10);
     }
 
     #[test]

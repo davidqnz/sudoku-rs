@@ -29,9 +29,9 @@ OPTIONS:
     --seed N                gen: seed the generator for a reproducible puzzle
     -h, --help              show this message
 
-A puzzle is 81 cells reading left to right, top to bottom, with '.', '0', or
-'_' for blanks. Whitespace and grid separators are ignored, so both a single
-line and a drawn 9-line grid are accepted.";
+A puzzle is 81 cells reading left to right, top to bottom, with '.', '0',
+'_', or '*' for blanks. Whitespace and grid separators are ignored, so both a
+single line and a drawn 9-line grid are accepted.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
