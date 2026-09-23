@@ -7,7 +7,9 @@
 
 use crate::board::Board;
 use crate::rng::Rng;
-use crate::solver::{SolveStats, count_solutions, solve_first, solve_first_with_rng};
+use crate::solver::{
+    Detail, SolveStats, count_solutions, solve_first, solve_first_with_detail, solve_first_with_rng,
+};
 
 /// How much guessing the solver should need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +87,7 @@ pub fn generate(difficulty: Difficulty, seed: u64) -> (Board, SolveStats) {
         if stats.branch_nodes >= difficulty.min_branches()
             && stats.branch_nodes <= difficulty.max_branches()
         {
-            return candidate;
+            return with_full_stats(candidate.0);
         }
         // Otherwise keep whichever attempt came closest to the target band.
         let closer = match &best {
@@ -99,7 +101,17 @@ pub fn generate(difficulty: Difficulty, seed: u64) -> (Board, SolveStats) {
         }
     }
 
-    best.expect("MAX_ATTEMPTS is non-zero")
+    let (puzzle, _) = best.expect("MAX_ATTEMPTS is non-zero");
+    with_full_stats(puzzle)
+}
+
+/// Pairs `puzzle` with every counter of its solve.
+///
+/// Digging needs only `branch_nodes`, so it skips the costlier counters. This
+/// solves the chosen puzzle once more to fill them in.
+fn with_full_stats(puzzle: Board) -> (Board, SolveStats) {
+    let (_, stats) = solve_first(&puzzle).expect("a dug puzzle has a solution");
+    (puzzle, stats)
 }
 
 /// How far a puzzle's cost falls outside the requested difficulty band.
@@ -114,6 +126,8 @@ fn distance(stats: SolveStats, difficulty: Difficulty) -> usize {
 
 /// Digs clues out of one random complete grid, refusing any removal that would
 /// make the puzzle ambiguous or push it past the difficulty budget.
+///
+/// The stats hold only the counters of [`Detail::Search`].
 fn dig(rng: &mut Rng, difficulty: Difficulty) -> (Board, SolveStats) {
     let (solution, _) =
         solve_first_with_rng(&Board::empty(), rng).expect("the empty board always has a solution");
@@ -131,7 +145,8 @@ fn dig(rng: &mut Rng, difficulty: Difficulty) -> (Board, SolveStats) {
             puzzle.assign(cell, digit);
             continue;
         }
-        let (_, cost) = solve_first(&puzzle).expect("a uniquely solvable puzzle solves");
+        let (_, cost) = solve_first_with_detail(&puzzle, Detail::Search)
+            .expect("a uniquely solvable puzzle solves");
         if cost.branch_nodes > difficulty.max_branches() {
             puzzle.assign(cell, digit);
             continue;

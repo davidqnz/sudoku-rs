@@ -64,10 +64,11 @@ transpose that is one word:
 - striking a digit from all 20 peers of a cell is `digits[d] &= !PEER_MASK[cell]`, not a
   walk down `PEERS`;
 - naked singles and empty domains, for all 81 cells at once, come from a fold over the
-  nine boards (`Grid::spans`) rather than 81 population counts. The fold merges in pairs,
-  not left to right: "has a candidate, has two" is associative, so the nine boards go four
-  deep instead of nine and the dependency chain stops being the limit. `most_constrained`
-  carries the same fold one rank further, for cells with three;
+  nine boards (`Grid::ranks`) rather than 81 population counts. The fold merges in pairs,
+  not left to right: "has a candidate, has two, has three" is associative, so the nine
+  boards go four deep instead of nine and the dependency chain stops being the limit.
+  `most_constrained` reads all three ranks; `spans` reads the first two, and the compiler
+  drops the third once the fold is inlined;
 - the digit of each naked single comes out of `Grid::digit_planes`: four unions of the
   boards, one per bit of a digit's index, which for a one-candidate cell spell that digit
   out in binary. Four bit tests, in place of searching the boards for the one holding the
@@ -78,7 +79,8 @@ transpose that is one word:
   cell's own bit, so the placement needs nothing looked up.
 
 Scan an 81-bit set as two words, never as one: a `u128` has no trailing-zero count of its
-own, and the high half is empty most times it is asked. Carry a cell's bit alongside its
+own, and the high half is empty most times it is asked. `for_each_cell` does this; use it
+when only the index is wanted. Carry a cell's bit alongside its
 index wherever both are wanted -- the low bit of the mask being scanned already is it.
 
 A `Grid` is 224 bytes and `Copy`, so `search` still branches on a copy rather than a trail

@@ -13,6 +13,7 @@
 //! is built only at the boundary -- once on the way in, and once per solution
 //! handed to a visitor.
 
+use std::fmt;
 use std::ops::ControlFlow;
 
 use crate::board::{ALL, ALL_UNITS, Board, CELL_UNIT_IDS, CELL_UNITS, PEERS, UNITS};
@@ -22,6 +23,14 @@ use crate::rng::Rng;
 /// digit has nowhere to go in a unit.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Contradiction;
+
+impl fmt::Display for Contradiction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the board cannot be completed")
+    }
+}
+
+impl std::error::Error for Contradiction {}
 
 /// Work done while solving. Useful for rating a puzzle's difficulty.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -106,27 +115,42 @@ const fn build_unit_masks() -> [u128; 27] {
     masks
 }
 
-/// Combines two spans: cells with a candidate, and cells with two.
+/// Calls `f` with the index of each cell in `set`, lowest first.
 ///
-/// A cell holds two candidates across the union when either side already had
-/// two, or each side gave it one.
-#[inline]
-fn merge(left: (u128, u128), right: (u128, u128)) -> (u128, u128) {
-    (left.0 | right.0, left.1 | right.1 | (left.0 & right.0))
+/// The set is scanned as two words rather than one: a `u128` has no trailing
+/// zero count of its own, so every step of a 128-bit scan pays for the halves
+/// to be stitched back together and taken apart again. The high half is also
+/// empty for most sets, and this way it costs one test to skip.
+#[inline(always)]
+fn for_each_cell(set: u128, mut f: impl FnMut(usize)) {
+    let mut low = set as u64;
+    while low != 0 {
+        f(low.trailing_zeros() as usize);
+        low &= low - 1;
+    }
+    let mut high = (set >> 64) as u32;
+    while high != 0 {
+        f(64 + high.trailing_zeros() as usize);
+        high &= high - 1;
+    }
 }
 
-/// One digit's board as a span: every cell it claims has one candidate.
+/// Cells with at least one, at least two, and at least three candidates.
+type Ranks = (u128, u128, u128);
+
+/// One digit's board as ranks: every cell it claims has one candidate.
 #[inline]
-fn span1(board_of_digit: u128) -> (u128, u128, u128) {
+fn ranks_of(board_of_digit: u128) -> Ranks {
     (board_of_digit, 0, 0)
 }
 
-/// [`merge`], carrying a third rank: cells with three candidates.
+/// Combines the ranks of two disjoint sets of digits.
 ///
-/// A cell reaches three across the union by having three on one side, or two
+/// A cell reaches two across the union when either side already had two, or
+/// each side gave it one. It reaches three by having three on one side, or two
 /// on one and one on the other.
 #[inline]
-fn merge3(left: (u128, u128, u128), right: (u128, u128, u128)) -> (u128, u128, u128) {
+fn merge(left: Ranks, right: Ranks) -> Ranks {
     (
         left.0 | right.0,
         left.1 | right.1 | (left.0 & right.0),
@@ -183,30 +207,10 @@ impl Grid {
         }
     }
 
-    /// Transposes back. Called once per solution, and once for the public
-    /// [`propagate`], so it walks candidates rather than cells: a solved grid
-    /// has 81 of them, where a cell-major loop would do 81 gathers of nine.
+    /// Transposes back, for the public [`propagate`], where a cell may still
+    /// hold several digits.
     fn to_board(self) -> Board {
-        let mut cells = [0u16; 81];
-        for (digit, board_of_digit) in self.digits.into_iter().enumerate() {
-            // Scanned as two words rather than one: a `u128` has no trailing
-            // zero count of its own, so every step of a 128-bit scan pays for
-            // the halves to be stitched back together and taken apart again.
-            let bit = 1u16 << digit;
-            let mut low = board_of_digit as u64;
-            while low != 0 {
-                let cell = low.trailing_zeros() as usize;
-                low &= low - 1;
-                cells[cell] |= bit;
-            }
-            let mut high = (board_of_digit >> 64) as u32;
-            while high != 0 {
-                let cell = 64 + high.trailing_zeros() as usize;
-                high &= high - 1;
-                cells[cell] |= bit;
-            }
-        }
-        Board::from_cells(cells)
+        self.transpose(|cell, bit| *cell |= bit)
     }
 
     /// Transposes a grid the search has finished with.
@@ -216,21 +220,19 @@ impl Grid {
     /// [`Grid::to_board`], and worth having on the one call the search makes
     /// per solution it finds.
     fn to_solution_board(self) -> Board {
+        self.transpose(|cell, bit| *cell = bit)
+    }
+
+    /// Calls `write` with each cell and the bit of each digit it holds.
+    ///
+    /// Walks candidates rather than cells: a solved grid has 81 of them, where
+    /// a cell-major loop would do 81 gathers of nine.
+    #[inline(always)]
+    fn transpose(self, write: impl Fn(&mut u16, u16)) -> Board {
         let mut cells = [0u16; 81];
         for (digit, board_of_digit) in self.digits.into_iter().enumerate() {
             let bit = 1u16 << digit;
-            let mut low = board_of_digit as u64;
-            while low != 0 {
-                let cell = low.trailing_zeros() as usize;
-                low &= low - 1;
-                cells[cell] = bit;
-            }
-            let mut high = (board_of_digit >> 64) as u32;
-            while high != 0 {
-                let cell = 64 + high.trailing_zeros() as usize;
-                high &= high - 1;
-                cells[cell] = bit;
-            }
+            for_each_cell(board_of_digit, |cell| write(&mut cells[cell], bit));
         }
         Board::from_cells(cells)
     }
@@ -246,29 +248,38 @@ impl Grid {
         mask
     }
 
+    /// Cells with at least one, two, and three candidates, for the whole grid.
+    ///
+    /// Merged in pairs rather than accumulated left to right. The merge is
+    /// associative -- two halves reach two candidates either inside one of
+    /// them or across the two -- so the nine boards fold four deep instead of
+    /// nine, and the machine has independent work to do at every level.
+    ///
+    /// A caller that ignores the third rank does not pay for it: once inlined,
+    /// the compiler drops the operations whose result nobody reads.
+    #[inline(always)]
+    fn ranks(&self) -> Ranks {
+        let d = &self.digits;
+        let ab = merge(
+            merge(ranks_of(d[0]), ranks_of(d[1])),
+            merge(ranks_of(d[2]), ranks_of(d[3])),
+        );
+        let ce = merge(
+            merge(ranks_of(d[4]), ranks_of(d[5])),
+            merge(ranks_of(d[6]), ranks_of(d[7])),
+        );
+        merge(merge(ab, ce), ranks_of(d[8]))
+    }
+
     /// Cells with at least one candidate, and cells with at least two.
     ///
-    /// Nine rounds of two `OR`s and an `AND` answer both questions for the
-    /// whole grid: a cell reaching `at_least_two` was already in
-    /// `at_least_one` when a second digit claimed it. `!at_least_one` is then
-    /// the empty domains, and `at_least_one & !at_least_two` the single ones,
-    /// which between them are everything arc consistency needs to look at.
+    /// `!at_least_one` is the empty domains, and `at_least_one & !at_least_two`
+    /// the single ones, which between them are everything arc consistency
+    /// needs to look at.
     #[inline]
     fn spans(&self) -> (u128, u128) {
-        // Merged in pairs rather than accumulated left to right. The merge is
-        // associative -- two halves reach two candidates either inside one of
-        // them or across the two -- so the nine boards can be folded four
-        // deep instead of nine, and the machine has independent work to do at
-        // every level.
-        let d = &self.digits;
-        let (a1, a2) = merge((d[0], 0), (d[1], 0));
-        let (b1, b2) = merge((d[2], 0), (d[3], 0));
-        let (c1, c2) = merge((d[4], 0), (d[5], 0));
-        let (e1, e2) = merge((d[6], 0), (d[7], 0));
-        let ab = merge((a1, a2), (b1, b2));
-        let ce = merge((c1, c2), (e1, e2));
-        let (one, two) = merge(ab, ce);
-        (one | d[8], two | (one & d[8]))
+        let (at_least_one, at_least_two, _) = self.ranks();
+        (at_least_one, at_least_two)
     }
 
     /// Fixes `cell` to `digit` when the cell still holds other candidates, as
@@ -323,20 +334,7 @@ impl Grid {
         if DETAILED {
             stats.eliminations += removed.count_ones() as usize;
         }
-        // Two words rather than one, as in `to_board`: the high half is empty
-        // for most cells, and a 128-bit scan cannot skip it for free.
-        let mut low = removed as u64;
-        while low != 0 {
-            let peer = low.trailing_zeros() as usize;
-            low &= low - 1;
-            *dirty |= CELL_UNITS[peer];
-        }
-        let mut high = (removed >> 64) as u32;
-        while high != 0 {
-            let peer = 64 + high.trailing_zeros() as usize;
-            high &= high - 1;
-            *dirty |= CELL_UNITS[peer];
-        }
+        for_each_cell(removed, |peer| *dirty |= CELL_UNITS[peer]);
     }
 
     /// The digit index of every single-candidate cell, as four planes.
@@ -525,17 +523,7 @@ impl Grid {
         if self.solved == FULL {
             return None;
         }
-        // Folded in pairs, for the reason [`Grid::spans`] is.
-        let d = &self.digits;
-        let ab = merge3(
-            merge3(span1(d[0]), span1(d[1])),
-            merge3(span1(d[2]), span1(d[3])),
-        );
-        let ce = merge3(
-            merge3(span1(d[4]), span1(d[5])),
-            merge3(span1(d[6]), span1(d[7])),
-        );
-        let (_, at_least_two, at_least_three) = merge3(merge3(ab, ce), span1(d[8]));
+        let (_, at_least_two, at_least_three) = self.ranks();
 
         let exactly_two = at_least_two & !at_least_three;
         if exactly_two != 0 {
@@ -612,6 +600,30 @@ impl Sink for Counter {
     }
 }
 
+/// The order search tries the digits of a branch cell in.
+///
+/// A type parameter rather than a runtime choice, so a search with no
+/// shuffle does not test for one at every node.
+trait Order {
+    /// Reorders `digits`, which arrive lowest first.
+    fn arrange(&mut self, digits: &mut [u8]);
+}
+
+/// Lowest digit first.
+struct Ascending;
+
+impl Order for Ascending {
+    #[inline]
+    fn arrange(&mut self, _digits: &mut [u8]) {}
+}
+
+impl Order for Rng {
+    #[inline]
+    fn arrange(&mut self, digits: &mut [u8]) {
+        self.shuffle(digits);
+    }
+}
+
 /// Runs propagation to a fixpoint, narrowing domains in place.
 ///
 /// Returning `Ok` does not mean the board is solved, only that it is arc
@@ -628,27 +640,36 @@ pub fn propagate(board: &mut Board) -> Result<(), Contradiction> {
 
 /// Solves the puzzle, returning the first solution found.
 pub fn solve_first(board: &Board) -> Option<(Board, SolveStats)> {
-    solve_first_ordered(board, None)
+    solve_first_with_detail(board, Detail::Full)
+}
+
+/// [`solve_first`], measuring only what `detail` asks for.
+pub fn solve_first_with_detail(board: &Board, detail: Detail) -> Option<(Board, SolveStats)> {
+    solve_first_ordered(board, &mut Ascending, detail)
 }
 
 /// Like [`solve_first`], but tries candidate digits in a random order. Feeding
 /// it an empty board is how the generator draws a random complete grid.
 pub fn solve_first_with_rng(board: &Board, rng: &mut Rng) -> Option<(Board, SolveStats)> {
-    solve_first_ordered(board, Some(rng))
+    solve_first_ordered(board, rng, Detail::Full)
 }
 
-fn solve_first_ordered(board: &Board, rng: Option<&mut Rng>) -> Option<(Board, SolveStats)> {
+fn solve_first_ordered<O: Order>(
+    board: &Board,
+    order: &mut O,
+    detail: Detail,
+) -> Option<(Board, SolveStats)> {
     let mut solution = None;
     let mut stats = SolveStats::default();
-    let mut rng = rng;
-    let _ = solve::<_, true>(
+    let _ = solve_with(
         board,
         &mut Visitor(|found: &Board| {
             solution = Some(*found);
             ControlFlow::Break(())
         }),
+        order,
         &mut stats,
-        &mut rng,
+        detail,
     );
     solution.map(|solution| (solution, stats))
 }
@@ -690,8 +711,8 @@ where
     let _ = solve_with(
         board,
         &mut Visitor(&mut visit),
+        &mut Ascending,
         &mut stats,
-        &mut None,
         detail,
     );
     stats
@@ -719,16 +740,16 @@ pub fn count_solutions_with_stats(
         return (0, stats);
     }
     let mut counter = Counter { count: 0, limit };
-    let _ = solve_with(board, &mut counter, &mut stats, &mut None, detail);
+    let _ = solve_with(board, &mut counter, &mut Ascending, &mut stats, detail);
     (counter.count, stats)
 }
 
 /// Transposes the caller's board, propagates it, then hands it to [`search`].
-fn solve<S: Sink, const DETAILED: bool>(
+fn solve<S: Sink, O: Order, const DETAILED: bool>(
     board: &Board,
     sink: &mut S,
+    order: &mut O,
     stats: &mut SolveStats,
-    rng: &mut Option<&mut Rng>,
 ) -> ControlFlow<()> {
     let mut grid = Grid::from_board(board);
     let mut dirty = ALL_UNITS;
@@ -739,20 +760,20 @@ fn solve<S: Sink, const DETAILED: bool>(
         stats.backtracks += 1;
         return ControlFlow::Continue(());
     }
-    search::<S, DETAILED>(grid, sink, stats, rng)
+    search::<S, O, DETAILED>(grid, sink, order, stats)
 }
 
 /// Picks the instantiation of [`solve`] the caller asked for.
-fn solve_with<S: Sink>(
+fn solve_with<S: Sink, O: Order>(
     board: &Board,
     sink: &mut S,
+    order: &mut O,
     stats: &mut SolveStats,
-    rng: &mut Option<&mut Rng>,
     detail: Detail,
 ) -> ControlFlow<()> {
     match detail {
-        Detail::Full => solve::<S, true>(board, sink, stats, rng),
-        Detail::Search => solve::<S, false>(board, sink, stats, rng),
+        Detail::Full => solve::<S, O, true>(board, sink, order, stats),
+        Detail::Search => solve::<S, O, false>(board, sink, order, stats),
     }
 }
 
@@ -761,11 +782,11 @@ fn solve_with<S: Sink>(
 ///
 /// `grid` arrives at a propagation fixpoint, and every child leaves at one, so
 /// a child's propagation has only the cell this node guessed to spread.
-fn search<S: Sink, const DETAILED: bool>(
+fn search<S: Sink, O: Order, const DETAILED: bool>(
     grid: Grid,
     sink: &mut S,
+    order: &mut O,
     stats: &mut SolveStats,
-    rng: &mut Option<&mut Rng>,
 ) -> ControlFlow<()> {
     let Some(cell) = grid.most_constrained() else {
         return sink.solution(&grid);
@@ -781,9 +802,7 @@ fn search<S: Sink, const DETAILED: bool>(
         count += 1;
     }
     let digits = &mut digits[..count];
-    if let Some(rng) = rng.as_deref_mut() {
-        rng.shuffle(digits);
-    }
+    order.arrange(digits);
 
     for &digit in digits.iter() {
         // The grid is 224 bytes, so branching on a copy is cheaper and far
@@ -795,7 +814,7 @@ fn search<S: Sink, const DETAILED: bool>(
             stats.backtracks += 1;
             continue;
         }
-        search::<S, DETAILED>(child, sink, stats, rng)?;
+        search::<S, O, DETAILED>(child, sink, order, stats)?;
     }
     ControlFlow::Continue(())
 }

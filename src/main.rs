@@ -9,7 +9,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use sudoku_rs::board::Board;
 use sudoku_rs::generator::{Difficulty, generate};
 use sudoku_rs::solver::{
-    Detail, SolveStats, count_solutions, count_solutions_with_stats, for_each_solution, solve_first,
+    Detail, SolveStats, count_solutions, count_solutions_with_stats, for_each_solution_with_detail,
+    solve_first_with_detail,
 };
 
 const USAGE: &str = "\
@@ -103,7 +104,7 @@ fn solve_command(args: &[String]) -> Result<(), String> {
     }
 
     let started = Instant::now();
-    let solved = solve_first(&puzzle);
+    let solved = solve_first_with_detail(&puzzle, opts.detail());
     let elapsed = started.elapsed();
 
     let Some((solution, stats)) = solved else {
@@ -173,6 +174,18 @@ struct Options {
     limit: Option<usize>,
 }
 
+impl Options {
+    /// Counting every elimination costs about a tenth of the search, so only
+    /// ask for that detail when `--stats` will show it.
+    fn detail(&self) -> Detail {
+        if self.stats {
+            Detail::Full
+        } else {
+            Detail::Search
+        }
+    }
+}
+
 /// How many solutions a plain `solve` counts before it reports ">1000". A
 /// puzzle this ambiguous is under-constrained, so an exact figure tells the
 /// user nothing an exhaustive `--count` would not tell them better.
@@ -184,14 +197,7 @@ fn print_solution_count(puzzle: &Board, opts: &Options) -> Result<(), String> {
     let limit = opts.limit.unwrap_or(usize::MAX);
 
     let started = Instant::now();
-    // Counting every elimination costs about a tenth of the search, and this
-    // mode's output is a number, so only ask for that detail when it is shown.
-    let detail = if opts.stats {
-        Detail::Full
-    } else {
-        Detail::Search
-    };
-    let (count, stats) = count_solutions_with_stats(puzzle, limit, detail);
+    let (count, stats) = count_solutions_with_stats(puzzle, limit, opts.detail());
     let elapsed = started.elapsed();
 
     println!("{count}");
@@ -219,7 +225,7 @@ fn print_every_solution(puzzle: &Board, opts: &Options) -> Result<(), String> {
     let mut count = 0usize;
 
     let started = Instant::now();
-    let stats = for_each_solution(puzzle, |solution| {
+    let visit = |solution: &Board| {
         if count > 0 && !opts.line {
             println!();
         }
@@ -230,7 +236,8 @@ fn print_every_solution(puzzle: &Board, opts: &Options) -> Result<(), String> {
         } else {
             ControlFlow::Continue(())
         }
-    });
+    };
+    let stats = for_each_solution_with_detail(puzzle, visit, opts.detail());
     let elapsed = started.elapsed();
 
     if count == 0 {
