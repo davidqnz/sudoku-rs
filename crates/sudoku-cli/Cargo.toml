@@ -1,0 +1,11 @@
+[package]
+name = "sudoku-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "sudoku-rs"
+path = "src/main.rs"
+
+[dependencies]
+sudoku-core.workspace = true

@@ -5,16 +5,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```sh
-cargo test                          # unit tests, integration tests, and doctests
-cargo test --test solver            # only tests/solver.rs
+cargo test                          # every crate: unit, integration, and doctests
+cargo test -p sudoku-core --test solver   # only crates/sudoku-core/tests/solver.rs
 cargo test escargot                 # one test, by substring of its name
-cargo test --lib                    # only the #[cfg(test)] modules in src/
+cargo test -p sudoku-core --lib     # only the #[cfg(test)] modules in the engine
 cargo clippy --all-targets
+cargo clippy -p sudoku-wasm --all-targets --target wasm32-unknown-unknown
 cargo fmt
 cargo run -- gen --difficulty hard --stats
 cargo run --release -- solve puzzle.txt --count --stats
 just bench                          # criterion: solutions per second
+just test-wasm                      # wasm-pack test --node: the bindings under a JS host
+just wasm [target]                  # wasm-pack build into crates/sudoku-wasm/pkg
 ```
+
+The wasm recipes need the `wasm32-unknown-unknown` target and `wasm-pack`.
+`cargo test` builds the wasm crate natively but runs none of its tests: they
+are `wasm_bindgen_test`s gated on `target_arch = "wasm32"`.
 
 Generator tests solve many puzzles. Use `cargo test --release` if they feel slow.
 
@@ -27,7 +34,7 @@ solutions to enumerate. Pass `--limit` if you need to.
 The benchmark uses a 20-clue grid and enumerates its 31610 solutions -- a
 puzzle with one solution would only measure how fast the search gets lucky.
 
-`just bench` runs `benches/solver.rs` under criterion and reports a rate.
+`just bench` runs `crates/sudoku-core/benches/solver.rs` under criterion and reports a rate.
 It has two cases: `count` is the search alone, and `visit` adds the `Board` built
 per solution, which is a good third of the work on a grid with this many. The
 puzzle is inlined there, next to the `SOLUTIONS` count criterion divides by to
@@ -37,13 +44,21 @@ benchmark keeping its own arithmetic honest -- the solver is the test suite's
 business, not the benchmark's.
 
 `cargo test` does not build bench targets; `cargo clippy --all-targets` does.
-Criterion is a dev-dependency, so the crate itself still has none, but it does
+Criterion is a dev-dependency, so the engine itself still has none, but it does
 pull about 30 crates into the lockfile.
 
 ## Architecture
 
-A 9x9 Sudoku engine (`src/lib.rs`, crate `sudoku_rs`) plus a text interface (`src/main.rs`).
-The engine does no I/O. All printing, argument handling, and error messages stay in `main.rs`.
+A Cargo workspace of three crates under `crates/`:
+
+- `sudoku-core` (lib `sudoku_core`): the 9x9 engine. It does no I/O and has no runtime
+  dependencies. Paths below like `src/solver.rs` are relative to this crate.
+- `sudoku-cli` (binary `sudoku-rs`): the text interface. All printing, argument
+  handling, and error messages stay in its `main.rs`.
+- `sudoku-wasm`: JS bindings over the engine via `wasm-bindgen` (see the end of this file).
+
+The release profile lives in the root `Cargo.toml`, since Cargo ignores profiles
+set in member crates.
 
 **Domains are bitmasks.** A cell is a `u16`. Bit 0 means digit 1, bit 8 means digit 9.
 One bit set means the cell is solved; zero bits set means a contradiction. `Board` holds
@@ -122,7 +137,7 @@ break out or accept an endless stream.
 free. `assignments` and `eliminations` are counted inside propagation, which runs millions
 of times, and cost about a tenth of a solve; `Detail::Search` drops them. It is a const
 generic (`DETAILED`) threaded through propagation and search, so the counters compile
-away rather than being branched over. `main.rs` asks for `Detail::Full` only when
+away rather than being branched over. The CLI's `main.rs` asks for `Detail::Full` only when
 `--stats` was passed.
 
 `SolveStats.branch_nodes` is the difficulty measure. It counts the guesses propagation
@@ -147,7 +162,7 @@ to `Rng`, to the shuffle, to the order the generator draws numbers, to which cel
 expected, but report it: diff `gen --seed N --line --stats` across a few seeds and
 difficulties before and after.
 
-`rng::Rng` is SplitMix64, written in-crate so the crate keeps zero runtime dependencies
+`rng::Rng` is SplitMix64, written in-crate so the engine keeps zero runtime dependencies
 (criterion, in `[dev-dependencies]`, is the only one). Do not add a runtime dependency
 without a reason.
 
@@ -159,3 +174,14 @@ of small hot functions. Benchmark with `--release`; a debug build is not compara
 blanks, and skips whitespace and grid separators, so a one-line puzzle and a drawn grid
 both parse. It rejects a puzzle whose given digits already conflict. `Display` and
 `to_line` write a compact form; `to_pretty` writes the boxed grid, which parses back.
+
+**The wasm crate is a thin boundary** (`crates/sudoku-wasm`). Like the CLI, it adds no
+logic of its own. Puzzles cross it as strings, in any form `FromStr` accepts, and come
+back as `to_line` strings. Parse failures throw a JS `Error` with the `ParseError` message.
+It exports `solve`, `countSolutions`, `forEachSolution`, `generate`, and `toPretty`.
+`forEachSolution` streams solutions to a JS callback rather than returning an array,
+for the same reason `for_each_solution` never collects: returning `false` stops it, and
+a callback that throws stops the search and is rethrown. Its dependencies are
+`wasm-bindgen` and `js-sys`. It needs `js-sys` for `Function` and for `Math.random`,
+which seeds an unseeded `generate`, because wasm32-unknown-unknown has no clock to
+seed from. Keep those dependencies out of `sudoku-core`.

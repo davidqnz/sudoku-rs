@@ -1,0 +1,20 @@
+[package]
+name = "sudoku-wasm"
+version.workspace = true
+edition.workspace = true
+description = "WebAssembly bindings to the sudoku-core engine"
+
+[lib]
+# `cdylib` is the .wasm module; `rlib` lets the crate build and lint natively
+# alongside the rest of the workspace.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sudoku-core.workspace = true
+wasm-bindgen = "0.2.128"
+# `Function` for the solution callback, and `Math.random` for an unseeded
+# `generate`: wasm32-unknown-unknown has no clock or OS entropy to fall back on.
+js-sys = "0.3.105"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.78"

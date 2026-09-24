@@ -11,8 +11,8 @@ use std::hint::black_box;
 use std::ops::ControlFlow;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use sudoku_rs::Board;
-use sudoku_rs::solver::{count_solutions, for_each_solution};
+use sudoku_core::Board;
+use sudoku_core::solver::{count_solutions, for_each_solution};
 
 /// `puzzles/30k.txt`, inlined so the benchmark does not depend on the file.
 /// Twenty clues, which is few enough to leave tens of thousands of solutions.

@@ -2,9 +2,9 @@
 
 use std::ops::ControlFlow;
 
-use sudoku_rs::board::{Board, ParseError};
-use sudoku_rs::generator::{Difficulty, generate};
-use sudoku_rs::solver::{
+use sudoku_core::board::{Board, ParseError};
+use sudoku_core::generator::{Difficulty, generate};
+use sudoku_core::solver::{
     Detail, count_solutions, count_solutions_with_stats, for_each_solution,
     for_each_solution_with_detail, propagate, solve_first,
 };

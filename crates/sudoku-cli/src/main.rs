@@ -1,14 +1,14 @@
 //! Text interface to the Sudoku engine. All I/O, argument handling, and
-//! formatting live here; `sudoku_rs` itself stays free of them.
+//! formatting live here; `sudoku_core` itself stays free of them.
 
 use std::io::Read;
 use std::ops::ControlFlow;
 use std::process::ExitCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use sudoku_rs::board::Board;
-use sudoku_rs::generator::{Difficulty, generate};
-use sudoku_rs::solver::{
+use sudoku_core::board::Board;
+use sudoku_core::generator::{Difficulty, generate};
+use sudoku_core::solver::{
     Detail, SolveStats, count_solutions, count_solutions_with_stats, for_each_solution_with_detail,
     solve_first_with_detail,
 };

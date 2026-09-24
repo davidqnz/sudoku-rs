@@ -1,0 +1,13 @@
+[package]
+name = "sudoku-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[[bench]]
+name = "solver"
+harness = false
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

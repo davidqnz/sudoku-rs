@@ -683,7 +683,7 @@ fn solve_first_ordered<O: Order>(
 ///
 /// ```
 /// use std::ops::ControlFlow;
-/// use sudoku_rs::{Board, solver};
+/// use sudoku_core::{Board, solver};
 ///
 /// // Four blanks in a rectangle, holding two digits that can swap.
 /// let puzzle: Board = "534..8912672195348198342567859..1423426853791713924856\
