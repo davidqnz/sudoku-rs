@@ -213,6 +213,32 @@ impl Board {
         self.first_conflict().is_none()
     }
 
+    /// Every fixed cell whose digit repeats within one of its units. Both
+    /// cells of a clash are marked, so a player can see each side of it.
+    pub fn conflicts(&self) -> [bool; 81] {
+        let mut clashing = [false; 81];
+        for unit in UNITS.iter() {
+            let mut seen = 0u16;
+            let mut repeated = 0u16;
+            for &cell in unit {
+                let mask = self.cells[cell as usize];
+                if mask.count_ones() == 1 {
+                    repeated |= seen & mask;
+                    seen |= mask;
+                }
+            }
+            if repeated != 0 {
+                for &cell in unit {
+                    let mask = self.cells[cell as usize];
+                    if mask.count_ones() == 1 && mask & repeated != 0 {
+                        clashing[cell as usize] = true;
+                    }
+                }
+            }
+        }
+        clashing
+    }
+
     /// The first (cell, digit) that repeats a digit within a unit.
     fn first_conflict(&self) -> Option<(usize, u8)> {
         for unit in UNITS.iter() {
@@ -395,6 +421,20 @@ mod tests {
     #[should_panic(expected = "digit must be in 1..=9")]
     fn eliminating_ten_panics() {
         Board::empty().eliminate(0, 10);
+    }
+
+    #[test]
+    fn conflicts_mark_both_sides_of_every_clash() {
+        let mut board = Board::empty();
+        assert_eq!(board.conflicts(), [false; 81]);
+
+        board.assign(0, 5);
+        board.assign(8, 5); // same row as cell 0
+        board.assign(80, 5); // same column as cell 8
+        board.assign(40, 5); // shares no unit with any of them
+        board.assign(1, 3);
+        let clashing: Vec<usize> = (0..81).filter(|&i| board.conflicts()[i]).collect();
+        assert_eq!(clashing, [0, 8, 80]);
     }
 
     #[test]

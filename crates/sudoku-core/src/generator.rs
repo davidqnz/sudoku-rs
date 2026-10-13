@@ -23,6 +23,14 @@ pub enum Difficulty {
 }
 
 impl Difficulty {
+    /// The difficulty band a solve costing `branch_nodes` falls in.
+    pub fn for_branch_nodes(branch_nodes: usize) -> Difficulty {
+        [Difficulty::Easy, Difficulty::Medium]
+            .into_iter()
+            .find(|d| branch_nodes <= d.max_branches())
+            .unwrap_or(Difficulty::Hard)
+    }
+
     /// The most branch nodes a puzzle of this difficulty may cost.
     fn max_branches(self) -> usize {
         match self {
@@ -105,6 +113,16 @@ pub fn generate(difficulty: Difficulty, seed: u64) -> (Board, SolveStats) {
     with_full_stats(puzzle)
 }
 
+/// Rates a puzzle by the bands [`generate`] aims for, or `None` if it does not
+/// have exactly one solution -- only then does its difficulty mean anything.
+pub fn rate(puzzle: &Board) -> Option<Difficulty> {
+    if count_solutions(puzzle, 2) != 1 {
+        return None;
+    }
+    let (_, stats) = solve_first_with_detail(puzzle, Detail::Search)?;
+    Some(Difficulty::for_branch_nodes(stats.branch_nodes))
+}
+
 /// Pairs `puzzle` with every counter of its solve.
 ///
 /// Digging needs only `branch_nodes`, so it skips the costlier counters. This
@@ -165,6 +183,27 @@ mod tests {
     fn difficulty_bands_do_not_overlap() {
         assert!(Difficulty::Easy.max_branches() < Difficulty::Medium.min_branches());
         assert!(Difficulty::Medium.max_branches() < Difficulty::Hard.min_branches());
+    }
+
+    #[test]
+    fn every_band_rates_as_itself() {
+        for d in [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
+            assert_eq!(Difficulty::for_branch_nodes(d.min_branches()), d);
+            let top = d.max_branches().min(d.min_branches() + 1000);
+            assert_eq!(Difficulty::for_branch_nodes(top), d);
+        }
+    }
+
+    #[test]
+    fn a_generated_puzzle_rates_by_its_own_stats() {
+        for seed in 0..4 {
+            let (puzzle, stats) = generate(Difficulty::Medium, seed);
+            assert_eq!(
+                rate(&puzzle),
+                Some(Difficulty::for_branch_nodes(stats.branch_nodes))
+            );
+        }
+        assert_eq!(rate(&Board::empty()), None, "many solutions");
     }
 
     #[test]

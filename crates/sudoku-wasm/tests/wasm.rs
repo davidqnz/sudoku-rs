@@ -4,7 +4,10 @@
 #![cfg(target_arch = "wasm32")]
 
 use js_sys::Function;
-use sudoku_wasm::{count_solutions, for_each_solution, generate, solve, to_pretty};
+use sudoku_wasm::{
+    Difficulty, Technique, candidates, conflicts, count_solutions, for_each_solution, generate,
+    hint, rate, solve, to_line, to_pretty,
+};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -72,6 +75,8 @@ fn a_throwing_visitor_rethrows() {
 fn generates_a_unique_puzzle_reproducibly() {
     let first = generate("easy", Some(7)).unwrap();
     assert_eq!(first.seed, 7);
+    assert_eq!(first.difficulty, Difficulty::Easy);
+    assert_eq!(rate(&first.puzzle).unwrap(), Some(Difficulty::Easy));
     assert_eq!(count_solutions(&first.puzzle, Some(2)).unwrap(), 1);
     assert_eq!(generate("easy", Some(7)).unwrap().puzzle, first.puzzle);
 
@@ -84,4 +89,64 @@ fn bad_input_is_an_error() {
     assert!(generate("impossible", None).is_err());
     let _: JsValue = for_each_solution("123", &Function::new_no_args(""), None).unwrap_err();
     assert!(to_pretty("x").is_err());
+}
+
+#[wasm_bindgen_test]
+fn a_drawn_grid_comes_back_as_a_line() {
+    assert_eq!(to_line(&to_pretty(EASY).unwrap()).unwrap(), EASY);
+}
+
+/// `EASY` as the digits a game passes around, `0` for a blank.
+fn easy_cells() -> Vec<u8> {
+    EASY.bytes()
+        .map(|b| if b == b'.' { 0 } else { b - b'0' })
+        .collect()
+}
+
+#[wasm_bindgen_test]
+fn rates_only_puzzles_with_one_solution() {
+    assert_eq!(rate(EASY).unwrap(), Some(Difficulty::Easy));
+    assert_eq!(rate(TWO).unwrap(), None);
+}
+
+#[wasm_bindgen_test]
+fn flags_clashing_cells_without_rejecting_them() {
+    let mut cells = easy_cells();
+    assert!(conflicts(&cells).unwrap().iter().all(|&c| c == 0));
+    cells[2] = 5; // cell 0 already holds 5
+    let flags = conflicts(&cells).unwrap();
+    let clashing: Vec<usize> = (0..81).filter(|&i| flags[i] == 1).collect();
+    assert_eq!(clashing, [0, 2]);
+}
+
+#[wasm_bindgen_test]
+fn pencils_in_candidates() {
+    let masks = candidates(&easy_cells()).unwrap();
+    assert_eq!(masks.len(), 81);
+    assert_eq!(masks[0], 1 << 4, "a filled 5 keeps its own bit");
+    assert_eq!(masks[2], 0b1011, "1, 2, or 4");
+}
+
+#[wasm_bindgen_test]
+fn hints_name_a_technique_and_stop_at_a_wrong_entry() {
+    let mut cells = easy_cells();
+    let step = hint(&cells)
+        .unwrap()
+        .expect("an unsolved puzzle has a next step");
+    assert_eq!(step.technique, Technique::HiddenSingle);
+    assert!(step.house.is_some() && step.house_index.is_some());
+    assert_eq!(cells[step.cell as usize], 0);
+    assert_eq!(
+        EASY_SOLUTION.as_bytes()[step.cell as usize] - b'0',
+        step.digit
+    );
+
+    cells[2] = 2; // clashes with nothing, but the solution has 4 here
+    assert!(hint(&cells).unwrap().is_none());
+}
+
+#[wasm_bindgen_test]
+fn a_grid_of_the_wrong_shape_is_an_error() {
+    assert!(hint(&[0; 80]).is_err());
+    assert!(candidates(&[10; 81]).is_err());
 }

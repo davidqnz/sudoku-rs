@@ -17,6 +17,7 @@
 
 pub mod board;
 pub mod generator;
+pub mod hint;
 pub mod rng;
 pub mod solver;
 

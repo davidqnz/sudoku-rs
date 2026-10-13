@@ -1,2 +1,4 @@
 /target
 /crates/sudoku-wasm/pkg
+/web/node_modules
+/web/dist

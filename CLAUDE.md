@@ -17,6 +17,8 @@ cargo run --release -- solve puzzle.txt --count --stats
 just bench                          # criterion: solutions per second
 just test-wasm                      # wasm-pack test --node: the bindings under a JS host
 just wasm [target]                  # wasm-pack build into crates/sudoku-wasm/pkg
+just web                            # the React game in web/, on the Vite dev server
+(cd web && npm run build)           # rebuilds the wasm package, type-checks, bundles
 ```
 
 The wasm recipes need the `wasm32-unknown-unknown` target and `wasm-pack`.
@@ -170,6 +172,23 @@ without a reason.
 `panic = "abort"`), which is worth about 8% and matters because the solver is one crate
 of small hot functions. Benchmark with `--release`; a debug build is not comparable.
 
+**Hints are for people** (`src/hint.rs`). They read a board as a player sees it: a
+one-candidate cell is filled, and any other cell is blank. `candidates` strikes only the
+digits of filled peers, and never chains one deduction into the next the way propagation
+does. That way every pencil mark and every hint is something a person can check on the
+grid in front of them. `hint` offers hidden singles in boxes first, then in rows and
+columns, then naked singles. When none is left it falls back to `Technique::Solution`:
+the MRV cell's digit, taken from a solve. Placing a single and re-deriving candidates is
+the same fixpoint `propagate` reaches, so a puzzle rated `Easy` (`branch_nodes == 0`)
+always falls to singles alone, and a test holds that. `hint` returns `None` for a board
+it cannot solve, which on a unique puzzle is how a wrong entry shows up.
+`Board::conflicts` marks both cells of every clash, for highlighting.
+
+`Difficulty::for_branch_nodes` maps a solve's cost onto the generator's bands, and
+`generator::rate` applies it to any puzzle with exactly one solution. `generate` can fall
+back to the closest puzzle, so what it returns should be labelled with `rate`, not with
+the difficulty that was asked for. Many "hard" requests currently come back medium.
+
 **Board is the I/O boundary.** `FromStr` reads 81 cells, accepts `.`, `0`, `_`, or `*` for
 blanks, and skips whitespace and grid separators, so a one-line puzzle and a drawn grid
 both parse. It rejects a puzzle whose given digits already conflict. `Display` and
@@ -178,10 +197,22 @@ both parse. It rejects a puzzle whose given digits already conflict. `Display` a
 **The wasm crate is a thin boundary** (`crates/sudoku-wasm`). Like the CLI, it adds no
 logic of its own. Puzzles cross it as strings, in any form `FromStr` accepts, and come
 back as `to_line` strings. Parse failures throw a JS `Error` with the `ParseError` message.
-It exports `solve`, `countSolutions`, `forEachSolution`, `generate`, and `toPretty`.
+It exports `solve`, `countSolutions`, `forEachSolution`, `generate`, `rate`, `toLine`,
+and `toPretty` over puzzles. A player's grid is different: it may break the rules,
+and `FromStr` would reject it. So `conflicts`, `candidates`, and `hint` take a
+`Uint8Array` of 81 digits instead, `0` for blank, built with `Board::assign`.
+Difficulty, technique, and house kind are string enums, so they come out as TS unions.
 `forEachSolution` streams solutions to a JS callback rather than returning an array,
 for the same reason `for_each_solution` never collects: returning `false` stops it, and
 a callback that throws stops the search and is rethrown. Its dependencies are
 `wasm-bindgen` and `js-sys`. It needs `js-sys` for `Function` and for `Math.random`,
 which seeds an unseeded `generate`, because wasm32-unknown-unknown has no clock to
 seed from. Keep those dependencies out of `sudoku-core`.
+
+**The web app** (`web/`) is React + Vite + TypeScript, deliberately small: `game.ts`
+holds the game as plain, JSON-serializable data and every move as a pure function, and
+`App.tsx` is the whole UI. It links the wasm package with `file:../crates/sudoku-wasm/pkg`,
+built with `--target web`, so there are no Vite wasm plugins; `main.tsx` awaits `init()`
+before rendering. Sudoku rules come from the engine -- the app never decides a conflict,
+a candidate, or a hint itself. It only tracks notes, undo history, the timer, and which
+entries differ from the solution.

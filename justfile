@@ -10,3 +10,7 @@ wasm target="bundler":
 
 test-wasm:
     wasm-pack test --node crates/sudoku-wasm --release
+
+# The React game in web/, on the Vite dev server
+web:
+    cd web && npm install && npm run dev

@@ -1,0 +1,204 @@
+:root {
+  --size: min(94vw, 480px);
+  --ink: #1d2433;
+  --entered: #2457c5;
+  --line: #9aa3b5;
+  --peer: #eef2f8;
+  --same: #d6e2fb;
+  --selected: #b8cdf7;
+  --bad: #d23a3a;
+  --hint: #fff1b8;
+  font-family: system-ui, sans-serif;
+  color: var(--ink);
+}
+
+body {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+}
+
+main {
+  width: var(--size);
+  padding: 12px 0 24px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+.controls {
+  display: flex;
+  gap: 6px;
+}
+
+button,
+select {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button[aria-pressed="true"] {
+  background: var(--ink);
+  color: white;
+}
+
+.status {
+  display: flex;
+  justify-content: space-between;
+  margin: 12px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.difficulty {
+  text-transform: capitalize;
+}
+
+.board {
+  display: grid;
+  /* Fixed tracks both ways, so an empty row is as tall as a full one. */
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-template-rows: repeat(9, minmax(0, 1fr));
+
+  width: var(--size);
+  aspect-ratio: 1;
+  border: 2px solid var(--ink);
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--size) / 16);
+  color: var(--entered);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.cell:nth-child(9n) {
+  border-right: none;
+}
+.cell:nth-child(9n + 3),
+.cell:nth-child(9n + 6) {
+  border-right: 2px solid var(--ink);
+}
+.cell:nth-child(n + 19):nth-child(-n + 27),
+.cell:nth-child(n + 46):nth-child(-n + 54) {
+  border-bottom: 2px solid var(--ink);
+}
+.cell:nth-child(n + 73) {
+  border-bottom: none;
+}
+
+.cell.given {
+  color: var(--ink);
+  font-weight: 600;
+}
+.cell.peer {
+  background: var(--peer);
+}
+.cell.same {
+  background: var(--same);
+}
+.cell.hinted {
+  background: var(--hint);
+}
+.cell.selected {
+  background: var(--selected);
+}
+.cell.clash {
+  color: var(--bad);
+}
+.cell.wrong {
+  color: var(--bad);
+  text-decoration: underline wavy;
+}
+
+.notes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  height: 100%;
+  font-size: calc(var(--size) / 40);
+  color: #5b6475;
+  text-align: center;
+  align-items: center;
+}
+
+.notes .same {
+  color: var(--entered);
+  font-weight: 700;
+}
+
+.banner {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--hint);
+}
+
+.banner button {
+  margin-left: 8px;
+}
+
+.pad {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.pad button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 1.3rem;
+}
+
+.pad small {
+  font-size: 0.65rem;
+  color: #7a8394;
+}
+
+.pad button.used {
+  opacity: 0.35;
+}
+
+.tools {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.keys {
+  margin-top: 16px;
+  font-size: 0.75rem;
+  color: #7a8394;
+  text-align: center;
+}
